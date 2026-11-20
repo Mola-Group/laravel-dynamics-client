@@ -25,6 +25,10 @@ class BuildRequest implements BuildsRequest
             ->connectTimeout($config->connect_timeout)
             ->acceptJson()
             ->asJson()
+            ->when($config->isDataverse(), fn (PendingRequest $request): PendingRequest => $request->withHeaders([
+                'OData-Version' => '4.0',
+                'OData-MaxVersion' => '4.0',
+            ]))
             ->withHeaders($dynamics->getHeaders());
 
         return $this->request->authenticate($pendingRequest, $dynamics);

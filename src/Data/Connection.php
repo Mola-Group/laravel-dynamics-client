@@ -27,6 +27,7 @@ class Connection extends Data
 {
     /** @var array<string, string> */
     protected array $rules = [
+        'driver' => 'sometimes|in:business-central,dataverse',
         'base_url' => 'required|string',
         'parameters' => 'required|array',
         'companies' => 'present|array',
@@ -39,6 +40,11 @@ class Connection extends Data
         'timeout' => 'required|integer',
         'connect_timeout' => 'required|integer',
     ];
+
+    public function isDataverse(): bool
+    {
+        return $this->get('driver') === 'dataverse';
+    }
 
     public function company(string $name): string
     {

@@ -65,5 +65,22 @@ return [
                 'throw' => false,
             ],
         ],
+        'dataverse' => [
+            'driver' => 'dataverse',
+            'base_url' => '{organization_url}/api/data/v9.2',
+            'parameters' => [
+                'organization_url' => rtrim((string) env('DATAVERSE_URL', ''), '/'),
+                'tenant_id' => env('DATAVERSE_TENANT_ID'),
+            ],
+            'companies' => [],
+            'client_id' => env('DATAVERSE_CLIENT_ID'),
+            'client_secret' => env('DATAVERSE_CLIENT_SECRET'),
+            'token_url' => 'https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token',
+            'scope' => env('DATAVERSE_SCOPE', '{organization_url}/.default'),
+            'grant_type' => 'client_credentials',
+            'page_size' => (int) env('DATAVERSE_PAGE_SIZE', 1000),
+            'timeout' => (int) env('DATAVERSE_TIMEOUT', 30),
+            'connect_timeout' => (int) env('DATAVERSE_CONNECT_TIMEOUT', 10),
+        ],
     ],
 ];

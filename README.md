@@ -4,7 +4,7 @@
 
 # Laravel Dynamics Client
 
-This package connects your Laravel application to the Microsoft Dynamics 365 Business Central API. It authenticates
+This package connects Laravel to Microsoft Dynamics 365 Business Central and the Dataverse Web API used by Dynamics 365 Sales. It authenticates
 with OAuth client credentials and uses the [HTTP client](https://laravel.com/docs/master/http-client) of Laravel, which
 means responses, retries and fakes work exactly as you already know them.
 
@@ -63,8 +63,27 @@ DYNAMICS_OAUTH_CLIENT_SECRET=
 
 ### OAuth
 
-When using D365 cloud with [Microsoft identity platform](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow) your redirect uri will be: `https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token`
-and your base url should be `https://api.businesscentral.dynamics.com/v2.0/<tenant>/<environment>`.
+The package uses the [OAuth 2.0 client credentials flow](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-client-creds-grant-flow). It sends credentials to the tenant's token endpoint at `https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token`. Leave the redirect URI blank for this flow.
+
+### Dynamics 365 Sales (Dataverse)
+
+In Power Apps, select your Sales environment, then open **Settings > Developer resources** and copy the origin of its Web API endpoint. In Microsoft Entra ID, open your app registration and copy its directory (tenant) ID, application (client) ID, and client secret **Value**. In the Power Platform admin center, add the Entra registration as an application user for that environment and give it a security role for the required tables.
+
+```dotenv
+DATAVERSE_URL=https://your-org.api.crm.dynamics.com
+DATAVERSE_TENANT_ID=
+DATAVERSE_CLIENT_ID=
+DATAVERSE_CLIENT_SECRET=
+```
+
+Select the named connection with `connection('dataverse')` or set `DYNAMICS_CONNECTION=dataverse`. The client appends `/api/data/v9.2` and requests the `/.default` scope for that origin. Set `DATAVERSE_SCOPE` if your environment uses a different OAuth resource URI. If you already published `config/dynamics.php` with a `connections` array, add the new `dataverse` entry from the package to your application configuration.
+
+```php
+$dataverse = app(Dynamics::class)->connection('dataverse');
+$leads = $dataverse->get('leads', ['$select' => 'leadid,subject', '$top' => 10])->throw();
+```
+
+Run `php artisan dynamics:connect dataverse` to call Dataverse's `WhoAmI` operation. For `lazy()` and `lazyEntities()`, the client sets `Prefer: odata.maxpagesize` and follows same-origin `@odata.nextLink` URLs. Use `get()` with `$top` for a limited query. When updating or deleting a scoped Dataverse entity, set its `idKey` to the table's primary ID column, such as `leadid`.
 
 ### URL templates
 
@@ -130,7 +149,7 @@ $dynamics->connection('other')->entities('customers');
 
 ## Requests
 
-The client exposes the HTTP verbs directly. Every method returns the `Illuminate\Http\Client\Response`,.
+The client exposes the HTTP verbs directly. Every method returns the `Illuminate\Http\Client\Response`.
 
 ```php
 $response = $dynamics->get('customers', ['$top' => 10]);
@@ -205,13 +224,13 @@ $dynamics->entity($customer, 'customers')->update();
 
 ### Concurrency and `If-Match`
 
-Business Central requires an `If-Match` header on every write. The client adds one for you:
+The client chooses the `If-Match` header for `PATCH`, `PUT`, and `DELETE` in this order:
 
 1. The header you set yourself with `header('If-Match', $etag)` wins.
 2. Otherwise the ETag of the scoped entity is used, so the write fails when the record changed in the meantime.
 3. Otherwise `If-Match: *` is sent, which overwrites the record regardless of its version.
 
-That means an unscoped `patch()`, `put()` or `delete()` is an unconditional write by default. Scope the call to an
+That means an unscoped `patch()`, `put()` or `delete()` is an unconditional write by default. For Dataverse create-only upserts, set `If-None-Match: *` to omit the automatic `If-Match` header. Scope the call to an
 entity when you care about lost updates, or narrow it yourself:
 
 ```php
@@ -220,7 +239,7 @@ $dynamics->header('If-Match', $etag)->patch('customers(::id::)', ['displayName' 
 
 ## Lazy pagination
 
-Use `lazy()` to walk every record of an endpoint without holding them all in memory. It pages with `$top` and `$skip`
+For Business Central, use `lazy()` to walk every record of an endpoint without holding them all in memory. It pages with `$top` and `$skip`
 until a page comes back with fewer records than the page size, and yields each entry of the response's `value` array
 as an array.
 
@@ -311,8 +330,7 @@ $customers = app(Dynamics::class)->entities('customers');
 
 ## Commands
 
-Run the following command to check whether you can successfully connect to Dynamics. It reads the company of the
-connection and prints its name.
+Run the following command to check the connection. For Business Central it prints the company name. For Dataverse it calls the WhoAmI operation.
 
 ```shell
 php artisan dynamics:connect {connection?}

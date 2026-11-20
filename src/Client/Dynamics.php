@@ -173,7 +173,11 @@ class Dynamics
     /** @param  array<string, mixed>  $query */
     public function get(string $path, array $query = []): Response
     {
-        return $this->send(fn (PendingRequest $request): Response => $request->get($this->getUrl($path), $query));
+        return $this->send(function (PendingRequest $request) use ($path, $query): Response {
+            $url = $this->getUrl($path);
+
+            return $query === [] ? $request->get($url) : $request->get($url, $query);
+        });
     }
 
     /** @param  array<string, mixed>  $data */
@@ -236,7 +240,7 @@ class Dynamics
      */
     public function entities(string $endpoint, array $query = []): Collection
     {
-        return Entity::collection($this->get($endpoint, $query), ['endpoint' => $endpoint]);
+        return Entity::collection($this->get($endpoint, $query)->throw(), ['endpoint' => $endpoint]);
     }
 
     /**
@@ -255,7 +259,16 @@ class Dynamics
      */
     public function lazy(string $path, array $query = [], ?int $pageSize = null): LazyCollection
     {
-        $pageSize ??= $this->getConfig()->page_size;
+        $config = $this->getConfig();
+        $pageSize ??= $config->page_size;
+
+        throw_if($pageSize < 1, DynamicsException::class, 'Page size must be at least 1.');
+
+        if ($config->isDataverse()) {
+            throw_if($pageSize > 5000, DynamicsException::class, 'Dataverse page size cannot exceed 5000.');
+
+            return LazyCollection::make(fn (): Generator => $this->lazyDataverse($path, $query, $pageSize));
+        }
 
         return LazyCollection::make(function () use ($path, $query, $pageSize): Generator {
             $skip = 0;
@@ -276,6 +289,36 @@ class Dynamics
         });
     }
 
+    /**
+     * @param  array<string, mixed>  $query
+     * @return Generator<int, array<string, mixed>>
+     */
+    protected function lazyDataverse(string $path, array $query, int $pageSize): Generator
+    {
+        unset($query['$top'], $query['$skip']);
+
+        $prefer = 'odata.maxpagesize='.$pageSize;
+        $additionalPreferences = $this->getHeaders()['Prefer'] ?? null;
+        if (filled($additionalPreferences)) {
+            $prefer .= ', '.$additionalPreferences;
+        }
+
+        do {
+            $response = $this->header('Prefer', $prefer)->get($path, $query)->throw();
+
+            /** @var Collection<int, array<string, mixed>> $records */
+            $records = $response->collect('value');
+            foreach ($records as $record) {
+                yield $record;
+            }
+
+            $nextLink = $response->collect()->get('@odata.nextLink');
+            throw_if($nextLink !== null && ! is_string($nextLink), DynamicsException::class, 'Dataverse returned an invalid next link.');
+            $path = $nextLink ?? '';
+            $query = [];
+        } while ($path !== '');
+    }
+
     protected function scopedUrl(): string
     {
         throw_if(! $this->entity instanceof Entity, DynamicsException::class, 'No entity is scoped, call entity() first or pass a path.');
@@ -285,7 +328,9 @@ class Dynamics
 
     protected function configureEntityTag(): static
     {
-        if (array_key_exists('If-Match', $this->headers)) {
+        $headers = array_change_key_case($this->headers);
+
+        if (isset($headers['if-match']) || (isset($headers['if-none-match']) && $this->getConfig()->isDataverse())) {
             return $this;
         }
 
@@ -297,7 +342,19 @@ class Dynamics
 
     public function getUrl(string $path): string
     {
+        throw_if(
+            str_starts_with($path, '//') || str_contains($path, '\\') || preg_match('/[\x00-\x1f\x7f]/', $path) === 1,
+            DynamicsException::class,
+            'Invalid Dynamics request URL.'
+        );
+
         $path = ltrim($path, '/');
+
+        if (preg_match('/^[a-z][a-z0-9+.-]*:/i', $path) === 1) {
+            $origin = $this->urlOrigin($path);
+            throw_if($origin === null || $origin !== $this->urlOrigin($this->baseUrl()),
+                DynamicsException::class, 'Dynamics request URL must use the configured API origin.');
+        }
 
         if ($path !== '') {
             return $path;
@@ -308,6 +365,22 @@ class Dynamics
         $baseUrl = $this->baseUrl();
 
         return str_contains($baseUrl, '://') ? $baseUrl : '';
+    }
+
+    /** @return array{string, string, int}|null */
+    protected function urlOrigin(string $url): ?array
+    {
+        $parts = parse_url($url);
+        if ($parts === false || ! isset($parts['scheme'], $parts['host']) || isset($parts['user']) || isset($parts['pass'])) {
+            return null;
+        }
+
+        $scheme = $parts['scheme'];
+        if (! in_array($scheme, ['https', 'http'], true)) {
+            return null;
+        }
+
+        return [$scheme, strtolower($parts['host']), $parts['port'] ?? ($scheme === 'https' ? 443 : 80)];
     }
 
     public function available(): bool
@@ -364,6 +437,11 @@ class Dynamics
     public function tokenUrl(): string
     {
         return $this->buildUrl($this->getConfig()->token_url);
+    }
+
+    public function scope(): string
+    {
+        return $this->buildUrl($this->getConfig()->scope);
     }
 
     protected function buildUrl(string $template): string

@@ -18,7 +18,8 @@ class RequestAccessToken implements RequestsAccessToken
     {
         $config = Dynamics::config($dynamics->getConnection());
         $tokenUrl = $dynamics->tokenUrl();
-        $cacheKey = $this->cacheKey($dynamics->getConnection(), $tokenUrl, $config);
+        $scope = $dynamics->scope();
+        $cacheKey = $this->cacheKey($dynamics->getConnection(), $tokenUrl, $scope, $config);
 
         $cached = cache()->get($cacheKey);
 
@@ -30,13 +31,14 @@ class RequestAccessToken implements RequestsAccessToken
         }
 
         $response = Http::asForm()
+            ->withoutRedirecting()
             ->acceptJson()
             ->timeout($config->timeout)
             ->connectTimeout($config->connect_timeout)
             ->post($tokenUrl, [
                 'client_id' => $config->client_id,
                 'client_secret' => $config->client_secret,
-                'scope' => $config->scope,
+                'scope' => $scope,
                 'grant_type' => $config->grant_type,
             ])
             ->throw();
@@ -55,9 +57,9 @@ class RequestAccessToken implements RequestsAccessToken
         return $token;
     }
 
-    protected function cacheKey(string $connection, string $tokenUrl, Connection $config): string
+    protected function cacheKey(string $connection, string $tokenUrl, string $scope, Connection $config): string
     {
-        return static::CACHE_KEY.$connection.':'.sha1(implode('|', [$tokenUrl, $config->scope, $config->client_id]));
+        return static::CACHE_KEY.$connection.':'.sha1(implode('|', [$tokenUrl, $scope, $config->client_id]));
     }
 
     public static function bind(): void
